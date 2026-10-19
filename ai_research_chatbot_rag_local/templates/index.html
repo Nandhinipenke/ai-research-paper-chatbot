@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Research Paper AI Chatbot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header class="hero">
+      <div class="logo">📚</div>
+      <p class="eyebrow">LOCAL AI · RAG PROJECT</p>
+      <h1>Research Paper Chatbot</h1>
+      <p class="subtitle">Ask questions about a PDF and get an AI-generated answer grounded in its content.</p>
+      <div class="privacy-pill"><span></span> Runs locally with Ollama · No API key</div>
+    </header>
+
+    <section class="card upload-card">
+      <h2><span class="number">1</span> Upload your paper</h2>
+      <form id="upload-form">
+        <label class="dropzone" for="pdf-file">
+          <span class="upload-icon">↑</span>
+          <strong>Choose a research paper PDF</strong>
+          <small id="file-name">Up to 20 MB · Text-based PDFs work best</small>
+        </label>
+        <input id="pdf-file" type="file" accept=".pdf,application/pdf" required>
+        <button id="upload-button" class="primary full" type="submit">Upload and index paper</button>
+      </form>
+      <p id="upload-status" class="status" role="status">No paper loaded yet.</p>
+    </section>
+
+    <section class="card">
+      <h2><span class="number">2</span> Ask your question</h2>
+      <div class="suggestions">
+        <span>Try:</span>
+        <button type="button">What is the main objective?</button>
+        <button type="button">Explain the methodology simply.</button>
+        <button type="button">What are the limitations?</button>
+      </div>
+      <div id="chat" class="chat" aria-live="polite">
+        <div class="message bot"><div class="avatar">AI</div><div class="bubble">Hi! Upload and index a research paper, then ask a question in your own words.</div></div>
+      </div>
+      <form id="question-form" class="ask-form">
+        <label class="visually-hidden" for="question">Your question</label>
+        <input id="question" type="text" placeholder="Ask anything about the uploaded paper..." autocomplete="off">
+        <button class="primary" type="submit">Ask ↗</button>
+      </form>
+      <p class="hint">Answers are generated from retrieved paper excerpts. Always verify important details in the original paper.</p>
+    </section>
+
+    <footer>HTML · CSS · JavaScript · Flask · PyPDF · Ollama · RAG</footer>
+  </main>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
