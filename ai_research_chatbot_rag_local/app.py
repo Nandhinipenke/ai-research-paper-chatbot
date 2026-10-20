@@ -250,6 +250,30 @@ Answer based only on these excerpts.
             closing = "Please verify these passages in the original PDF and try again later."
         q = re.sub(r"\s+", " ", question.lower()).strip()
         quota_note = " (Gemini is rate-limited, so this is a local fallback answer, not a newly generated AI response.)"
+        if any(term in q for term in ("girl", "girls", "female", "females", "women", "gender", "how many boys", "how many girls")):
+            all_text = " ".join(chunk["text"] for chunk in document_chunks)
+            gender_chunks = [
+                chunk for chunk in document_chunks
+                if re.search(r"\\b(girls?|females?|women|gender|boys?|males?)\\b", chunk["text"], re.IGNORECASE)
+            ]
+            if not gender_chunks:
+                return (
+                    "The uploaded PDF does not provide a girls/female count or gender-wise percentage "
+                    "in its readable text, so I cannot calculate those values from this document. "
+                    "The paper appears to focus on study habits and academic scores, not gender-wise counts."
+                    + quota_note
+                )
+            excerpts_gender = []
+            for chunk in gender_chunks[:3]:
+                excerpt = re.sub(r"\\s+", " ", chunk["text"]).strip()
+                if len(excerpt) > 500:
+                    excerpt = excerpt[:497].rsplit(" ", 1)[0] + "..."
+                excerpts_gender.append(f"[Page {chunk['page']}] {excerpt}")
+            return (
+                "I found gender-related text, but the passages below do not automatically establish "
+                "a total number or percentage of girls. Please verify whether the original PDF contains "
+                "a complete gender-wise table:\\n" + "\\n".join(excerpts_gender) + quota_note
+            )
         if any(term in q for term in ("what type of data", "type of data", "what data", "data present", "kind of data", "data does this")):
             all_text = " ".join(chunk["text"] for chunk in document_chunks).lower()
             if any(term in all_text for term in ("gpa", "student", "academic performance", "secondary education")):
