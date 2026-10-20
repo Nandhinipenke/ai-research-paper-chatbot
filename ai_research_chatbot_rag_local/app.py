@@ -146,15 +146,15 @@ Answer based only on these excerpts.
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 700},
     }
 
-    # Discover text-capable models if the configured model is unavailable,
-    # busy, or rejects text output. TTS/audio-only models must be excluded.
+    # Discover models from Google's live model list. Never guess model IDs:
+    # only try models actually returned for this API key with generateContent.
     response = _call_gemini_model(api_root, GEMINI_MODEL, headers, payload)
     if response.status_code in (400, 404, 503):
         try:
             model_response = requests.get(
                 f"{api_root}/models",
                 headers={"x-goog-api-key": GEMINI_API_KEY},
-                timeout=(5, 15),
+                timeout=(4, 10),
             )
             if model_response.status_code == 200:
                 available = model_response.json().get("models", [])
@@ -163,8 +163,6 @@ Answer based only on these excerpts.
                     name = item.get("name", "").removeprefix("models/")
                     methods = item.get("supportedGenerationMethods", [])
                     lower_name = name.lower()
-                    # Audio/TTS-only models can expose generateContent but do not
-                    # accept text response modalities, so never use them here.
                     if (
                         name
                         and "generateContent" in methods
@@ -175,7 +173,8 @@ Answer based only on these excerpts.
                     ):
                         supported.append(name)
 
-                preferred = [
+                # Prefer fast models, but only if Google's live list confirms them.
+                preferred_order = [
                     "gemini-3.8-flash",
                     "gemini-3.8-flash-lite",
                     "gemini-3-flash",
@@ -185,14 +184,18 @@ Answer based only on these excerpts.
                     "gemini-2.0-flash",
                     "gemini-2.0-flash-lite",
                 ]
-                ordered_models = []
-                for name in preferred + supported:
-                    if name and name not in ordered_models and name != GEMINI_MODEL:
-                        ordered_models.append(name)
-                    if len(ordered_models) >= 2:
-                        break
+                supported_set = set(supported)
+                ordered_models = [
+                    name for name in preferred_order
+                    if name in supported_set and name != GEMINI_MODEL
+                ]
+                ordered_models += [
+                    name for name in supported
+                    if name not in ordered_models and name != GEMINI_MODEL
+                ]
 
-                for model_name in ordered_models:
+                # Try at most four models that the API explicitly lists.
+                for model_name in ordered_models[:4]:
                     candidate = _call_gemini_model(api_root, model_name, headers, payload)
                     response = candidate
                     if candidate.status_code not in (400, 404, 503):
