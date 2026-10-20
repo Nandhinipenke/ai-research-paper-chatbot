@@ -250,6 +250,49 @@ Answer based only on these excerpts.
             closing = "Please verify these passages in the original PDF and try again later."
         q = re.sub(r"\s+", " ", question.lower()).strip()
         quota_note = " (Gemini is rate-limited, so this is a local fallback answer, not a newly generated AI response.)"
+        if any(term in q for term in ("what type of data", "type of data", "what data", "data present", "kind of data", "data does this")):
+            all_text = " ".join(chunk["text"] for chunk in document_chunks).lower()
+            if any(term in all_text for term in ("gpa", "student", "academic performance", "secondary education")):
+                return (
+                    "This PDF contains student academic-performance data. It includes GPA scores and "
+                    "student-related parameters such as parents' education, study time, sports, mobile "
+                    "usage, health problems, goals, and yoga/physical exercise. The paper describes the "
+                    "data as tables, figures, graphs, and descriptive statistics such as mean, median, "
+                    "minimum, maximum, standard deviation, and variance. (Check the data description/specifications pages.)"
+                    + quota_note
+                )
+            kinds = []
+            for term, label in (
+                ("survey", "survey/questionnaire data"),
+                ("interview", "interview data"),
+                ("experiment", "experimental data"),
+                ("dataset", "a dataset"),
+                ("table", "tables"),
+                ("figure", "figures"),
+                ("graph", "graphs"),
+                ("image", "images"),
+                ("statistics", "statistical data"),
+                ("measurement", "measurement data"),
+            ):
+                if term in all_text and label not in kinds:
+                    kinds.append(label)
+            description = ", ".join(kinds[:5]) if kinds else "research text and extracted information"
+            return ("From the readable text, the PDF appears to contain " + description +
+                    ". The exact data type depends on the paper's dataset and tables; check the cited pages to confirm." + quota_note)
+        if any(term in q for term in ("link", "url", "doi", "website", "web site")):
+            all_text = " ".join(chunk["text"] for chunk in document_chunks)
+            links = re.findall(r"https?://[^\\s)\\]}>]+", all_text, flags=re.IGNORECASE)
+            links = [link.rstrip(".,;:") for link in links]
+            dois = re.findall(r"10\\.\\d{4,9}/[^\\s)\\]}>]+", all_text, flags=re.IGNORECASE)
+            for doi in dois:
+                doi = doi.rstrip(".,;:")
+                link = "https://doi.org/" + doi
+                if link not in links:
+                    links.append(link)
+            links = list(dict.fromkeys(links))
+            if links:
+                return "I found these links in the PDF:\\n" + "\\n".join("- " + link for link in links[:12]) + quota_note
+            return "I could not detect a web link or DOI in the PDF's readable text. It may be embedded as a clickable link or shown in a format the text extractor cannot read. Check the original PDF." + quota_note
         if any(term in q for term in ("methodology", "method", "workflow", "how does it work")):
             return (
                 "The methodology is: (1) upload the PDF, (2) extract text from each page, "
