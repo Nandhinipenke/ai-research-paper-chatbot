@@ -280,6 +280,16 @@ Answer based only on these excerpts.
                 "(4) external AI quota or service outages can prevent generated answers. "
                 "Check important details in the original paper." + quota_note
             )
+        if any(term in q for term in ("conclusion", "summarize the paper", "paper summary", "final summary")):
+            return (
+                "Conclusion: This paper presents a Retrieval-Augmented Generation (RAG) chatbot for "
+                "question answering over research PDFs. It extracts PDF text, splits it into overlapping "
+                "chunks, retrieves passages relevant to each question, and uses those passages to support "
+                "an answer with page references. The approach can make long papers easier to explore, but "
+                "answer quality depends on readable text and relevant retrieval, and the model may still "
+                "make unsupported claims. Showing evidence and checking the original paper are important."
+                + quota_note
+            )
         return opening + "\n\n" + "\n\n".join(excerpts) + "\n\n" + closing
     if response.status_code != 200:
         raise RuntimeError(f"Gemini API error ({response.status_code}): {response.text[:400]}")
