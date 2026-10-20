@@ -1,27 +1,20 @@
-# AI Research Paper Chatbot — Hosted AI Website
+# AI Research Paper Chatbot — Hosted Gemini AI
 
-Flask + HTML/CSS/JavaScript research-paper chatbot. It extracts text from a PDF, retrieves relevant passages using TF-IDF, and asks a hosted Hugging Face Inference Provider model to draft an answer grounded in those passages.
+A Flask + HTML/CSS/JavaScript research-paper chatbot. It extracts text from a PDF, retrieves relevant passages using TF-IDF, and asks the Google Gemini API to answer using those passages with page references.
 
-## Important: API token required
+## API key setup
 
-This hosted version requires a Hugging Face access token with **Make calls to Inference Providers** permission. Create one in Hugging Face Settings → Access Tokens. Keep it secret. Never paste it into `app.py`, HTML/JavaScript, or GitHub.
+The hosted app requires a Google Gemini API key. Create/manage it in Google AI Studio, then add it in **Render → your service → Environment** as `GEMINI_API_KEY`. Never commit the real key to GitHub or place it in browser-side JavaScript.
 
-For local Windows testing in PowerShell, set the token for the current terminal session:
+The default model is `gemini-2.5-flash`. If needed, set `GEMINI_MODEL` to a model available to your API key.
 
-```powershell
-$env:HF_TOKEN="paste_your_token_here"
-python app.py
-```
-
-Do not commit the token. The app defaults to model `openai/gpt-oss-120b:fastest`; provider availability, rate limits, and cost depend on your Hugging Face account and selected provider. If needed, set `HF_MODEL` to a model currently available to your account.
-
-## Local setup (Windows)
+## Local setup (Windows PowerShell)
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
-$env:HF_TOKEN="paste_your_token_here"
+$env:GEMINI_API_KEY="paste_your_key_here"
 python app.py
 ```
 
@@ -29,19 +22,21 @@ Open http://127.0.0.1:5000
 
 ## Deploy to Render
 
-1. Push this folder's contents to a GitHub repository.
-2. In Render, create **New → Web Service** and connect the repository.
-3. Build command: `pip install -r requirements.txt`
-4. Start command: `gunicorn app:app`
-5. In the Render service's **Environment** settings, add `HF_TOKEN` with your secret token as the value. Optionally add `HF_MODEL` if using a different supported model.
-6. Deploy. Render gives the service an HTTPS `onrender.com` URL.
+The Flask app is inside `ai_research_chatbot_rag_local`.
 
-Never add the real token to GitHub. If it is accidentally committed, revoke it and create a new one.
+1. Create or open a Render Web Service connected to this GitHub repository.
+2. Set **Root Directory** to `ai_research_chatbot_rag_local`.
+3. Build command: `pip install -r requirements.txt`
+4. Start command: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120`
+5. Add `GEMINI_API_KEY` in the service's Environment settings. Optionally set `GEMINI_MODEL` to `gemini-2.5-flash`.
+6. Deploy and open the HTTPS URL Render provides.
+
+Never commit the real API key. If a key is accidentally exposed, revoke it and create a new one.
 
 ## Notes / demo limitations
 
-- Uploaded paper and index are stored in process memory. They are temporary and may be lost when the service restarts or sleeps. This starter version is designed for a simple student demo, not multiple users at once.
-- Free hosting can sleep and has resource/time limits. AI provider usage can have separate limits or charges.
+- The uploaded paper and its index are held in process memory; a service restart clears them. This simple demo is not designed for multiple users to upload papers concurrently.
+- Free hosting may sleep and has resource/time limits. Gemini usage is subject to your account's quota and limits.
 - Scanned/image-only PDFs need OCR, which is not included.
 - Answers can be wrong; verify important claims against the cited page numbers.
-- The PDF size limit is 20 MB.
+- PDF upload limit: 20 MB.
