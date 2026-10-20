@@ -141,6 +141,7 @@ Answer based only on these excerpts.
 
     for attempt in range(3):
         try:
+            print("Gemini API status:", response.status_code, flush=True)
             response = requests.post(
                 url,
                 headers={
