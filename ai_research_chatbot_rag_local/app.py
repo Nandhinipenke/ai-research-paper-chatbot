@@ -11,7 +11,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
 document_chunks = []
 vectorizer = None
@@ -81,18 +81,27 @@ def retrieve_relevant_chunks(question, top_k=4):
     if vectorizer is None or chunk_matrix is None:
         return []
 
-    question_vector = vectorizer.transform([question])
-    scores = cosine_similarity(
-        question_vector, chunk_matrix
-    ).ravel()
+    # Expand common research-paper questions so natural wording matches
+    # terms authors often use in the paper.
+    query = question
+    lower_question = question.lower()
+    expansions = {
+        "methodology": "method approach proposed method experimental setup",
+        "limitations": "limitations weakness constraints future work",
+        "objective": "objective aim purpose goal contribution",
+        "results": "results findings evaluation performance",
+        "conclusion": "conclusion summary future work",
+    }
+    for key, terms in expansions.items():
+        if key in lower_question:
+            query += " " + terms
 
+    question_vector = vectorizer.transform([query])
+    scores = cosine_similarity(question_vector, chunk_matrix).ravel()
     indexes = scores.argsort()[::-1][:top_k]
 
-    return [
-        document_chunks[i]
-        for i in indexes
-        if scores[i] > 0
-    ]
+    # Do not pass unrelated passages to the language model.
+    return [document_chunks[i] for i in indexes if scores[i] > 0]
 
 
 def generate_answer(question, relevant_chunks):
