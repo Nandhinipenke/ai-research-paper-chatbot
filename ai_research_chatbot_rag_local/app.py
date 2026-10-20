@@ -149,7 +149,7 @@ Answer based only on these excerpts.
     # If the configured model is unavailable, discover the models exposed
     # to this API key and try supported candidates until one responds.
     response = _call_gemini_model(api_root, GEMINI_MODEL, headers, payload)
-    if response.status_code == 404:
+    if response.status_code in (404, 503):
         try:
             model_response = requests.get(
                 f"{api_root}/models",
@@ -180,7 +180,7 @@ Answer based only on these excerpts.
                 for model_name in ordered_models:
                     candidate = _call_gemini_model(api_root, model_name, headers, payload)
                     response = candidate
-                    if candidate.status_code != 404:
+                    if candidate.status_code not in (404, 503):
                         break
             else:
                 print(
