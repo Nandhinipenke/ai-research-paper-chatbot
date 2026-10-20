@@ -223,8 +223,32 @@ Answer based only on these excerpts.
             "Check the key in Google AI Studio and make sure the Generative Language API is enabled. "
             f"Google response: {response.text[:350]}"
         )
-    if response.status_code == 429:
-        raise RuntimeError("Gemini quota or rate limit reached. Check Google AI Studio usage limits.")
+    if response.status_code in (429, 503):
+        # If Gemini quota/capacity is unavailable, return the retrieved paper
+        # passages rather than showing a backend error.
+        excerpts = []
+        for chunk in relevant_chunks[:3]:
+            excerpt = re.sub(r"\\s+", " ", chunk["text"]).strip()
+            if len(excerpt) > 650:
+                excerpt = excerpt[:647].rsplit(" ", 1)[0] + "..."
+            excerpts.append(f"[Page {chunk['page']}] {excerpt}")
+        if response.status_code == 429:
+            opening = (
+                "Gemini's API quota/rate limit is currently reached, so I cannot "
+                "generate a rewritten answer right now. Here are the most relevant "
+                "passages I found in your paper:"
+            )
+            closing = (
+                "Please verify these passages in the original PDF. "
+                "Check your project's current limits in Google AI Studio."
+            )
+        else:
+            opening = (
+                "Gemini is temporarily busy, so here are the most relevant "
+                "paper passages instead of a generated summary:"
+            )
+            closing = "Please verify these passages in the original PDF and try again later."
+        return opening + "\\n\\n" + "\\n\\n".join(excerpts) + "\\n\\n" + closing
     if response.status_code != 200:
         raise RuntimeError(f"Gemini API error ({response.status_code}): {response.text[:400]}")
 
