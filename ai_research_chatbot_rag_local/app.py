@@ -146,10 +146,10 @@ Answer based only on these excerpts.
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 700},
     }
 
-    # If the configured model is unavailable, discover the models exposed
-    # to this API key and try supported candidates until one responds.
+    # Discover text-capable models if the configured model is unavailable,
+    # busy, or rejects text output. TTS/audio-only models must be excluded.
     response = _call_gemini_model(api_root, GEMINI_MODEL, headers, payload)
-    if response.status_code in (404, 503):
+    if response.status_code in (400, 404, 503):
         try:
             model_response = requests.get(
                 f"{api_root}/models",
@@ -158,15 +158,28 @@ Answer based only on these excerpts.
             )
             if model_response.status_code == 200:
                 available = model_response.json().get("models", [])
-                supported = [
-                    item.get("name", "").removeprefix("models/")
-                    for item in available
-                    if "generateContent" in item.get("supportedGenerationMethods", [])
-                ]
+                supported = []
+                for item in available:
+                    name = item.get("name", "").removeprefix("models/")
+                    methods = item.get("supportedGenerationMethods", [])
+                    lower_name = name.lower()
+                    # Audio/TTS-only models can expose generateContent but do not
+                    # accept text response modalities, so never use them here.
+                    if (
+                        name
+                        and "generateContent" in methods
+                        and not any(term in lower_name for term in (
+                            "tts", "text-to-speech", "audio", "embedding",
+                            "image", "live", "robotics"
+                        ))
+                    ):
+                        supported.append(name)
+
                 preferred = [
                     "gemini-3.8-flash",
                     "gemini-3.8-flash-lite",
                     "gemini-3-flash",
+                    "gemini-3-flash-preview",
                     "gemini-2.5-flash",
                     "gemini-2.5-flash-lite",
                     "gemini-2.0-flash",
@@ -180,7 +193,7 @@ Answer based only on these excerpts.
                 for model_name in ordered_models:
                     candidate = _call_gemini_model(api_root, model_name, headers, payload)
                     response = candidate
-                    if candidate.status_code not in (404, 503):
+                    if candidate.status_code not in (400, 404, 503):
                         break
             else:
                 print(
