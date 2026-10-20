@@ -136,46 +136,72 @@ Paper excerpts:
 
 Answer based only on these excerpts.
 """
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
-    )
+    api_root = "https://generativelanguage.googleapis.com/v1beta"
+    headers = {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type": "application/json",
+    }
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 700},
     }
 
+    # If the configured model is unavailable for this key/API, discover models
+    # that this key can actually call instead of repeatedly returning a 404.
+    models_to_try = [GEMINI_MODEL]
     response = None
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                url,
-                headers={
-                    "x-goog-api-key": GEMINI_API_KEY,
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=(5, 25),
-            )
-        except requests.exceptions.RequestException as error:
-            if attempt == 2:
-                raise RuntimeError(f"Could not connect to Gemini: {error}")
-            time.sleep(2)
-            continue
-
-        if response.status_code not in (429, 500, 502, 503, 504):
+    for model_name in models_to_try:
+        response = _call_gemini_model(api_root, model_name, headers, payload)
+        if response.status_code != 404:
             break
-        if attempt < 2:
-            time.sleep(2)
+
+    if response is not None and response.status_code == 404:
+        try:
+            model_response = requests.get(
+                f"{api_root}/models",
+                headers={"x-goog-api-key": GEMINI_API_KEY},
+                timeout=(5, 15),
+            )
+            if model_response.status_code == 200:
+                available = model_response.json().get("models", [])
+                preferred = [
+                    "gemini-2.5-flash",
+                    "gemini-2.5-flash-lite",
+                    "gemini-2.0-flash",
+                    "gemini-2.0-flash-lite",
+                ]
+                supported = {
+                    item.get("name", "").removeprefix("models/"): item
+                    for item in available
+                    if "generateContent" in item.get("supportedGenerationMethods", [])
+                }
+                fallback = next((name for name in preferred if name in supported), None)
+                if fallback is None:
+                    fallback = next(iter(supported), None)
+                if fallback:
+                    response = _call_gemini_model(api_root, fallback, headers, payload)
+            elif response is not None:
+                print(
+                    "Gemini model discovery failed:",
+                    model_response.status_code,
+                    model_response.text[:300],
+                    flush=True,
+                )
+        except requests.exceptions.RequestException as error:
+            print("Gemini model discovery error:", str(error), flush=True)
 
     if response is None:
         raise RuntimeError("Gemini did not return a response. Please try again.")
     if response.status_code in (401, 403):
-        raise RuntimeError("Gemini API key is invalid or access is denied. Check GEMINI_API_KEY in Render Environment.")
+        raise RuntimeError(
+            "Gemini API key is invalid or access is denied. Check GEMINI_API_KEY "
+            "in Render Environment and ensure the key is from Google AI Studio."
+        )
     if response.status_code == 404:
         raise RuntimeError(
-            f"Gemini model '{GEMINI_MODEL}' was not found for this API. "
-            "In Render Environment, set GEMINI_MODEL to a model available to your API key, such as gemini-2.5-flash."
+            "Google Gemini could not find a model available to this API key. "
+            "Check the key in Google AI Studio and make sure the Generative Language API is enabled. "
+            f"Google response: {response.text[:350]}"
         )
     if response.status_code == 429:
         raise RuntimeError("Gemini quota or rate limit reached. Check Google AI Studio usage limits.")
@@ -187,12 +213,35 @@ Answer based only on these excerpts.
     if not candidates:
         raise RuntimeError("Gemini returned no answer. Try another question.")
     parts = candidates[0].get("content", {}).get("parts", [])
-    answer = "\n".join(
+    answer = "\\n".join(
         part.get("text", "") for part in parts if part.get("text")
     ).strip()
     if not answer:
         raise RuntimeError("Gemini returned an empty answer.")
     return answer
+
+
+def _call_gemini_model(api_root, model_name, headers, payload):
+    url = f"{api_root}/models/{model_name}:generateContent"
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=(5, 25),
+            )
+        except requests.exceptions.RequestException as error:
+            if attempt == 2:
+                raise RuntimeError(f"Could not connect to Gemini: {error}")
+            time.sleep(2)
+            continue
+
+        if response.status_code not in (429, 500, 502, 503, 504):
+            return response
+        if attempt < 2:
+            time.sleep(2)
+    return response
 
 
 @app.route("/")
