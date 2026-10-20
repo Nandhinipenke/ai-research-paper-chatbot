@@ -64,13 +64,17 @@ def index_document(chunks):
     if not chunks:
         raise ValueError("No readable text was found in the PDF.")
 
-    vectorizer = TfidfVectorizer(
+    new_vectorizer = TfidfVectorizer(
         stop_words="english",
         ngram_range=(1, 2)
     )
-    chunk_matrix = vectorizer.fit_transform(
+
+    new_matrix = new_vectorizer.fit_transform(
         [chunk["text"] for chunk in chunks]
     )
+
+    vectorizer = new_vectorizer
+    chunk_matrix = new_matrix
 
 
 def retrieve_relevant_chunks(question, top_k=4):
@@ -141,7 +145,8 @@ Answer based only on these excerpts.
 
     for attempt in range(3):
         try:
-            print("Gemini API status:", response.status_code, flush=True)
+            print("Calling Gemini API...", flush=True)
+
             response = requests.post(
                 url,
                 headers={
@@ -149,22 +154,34 @@ Answer based only on these excerpts.
                     "Content-Type": "application/json"
                 },
                 json=payload,
-                timeout=25
+                timeout=(5, 20)
             )
 
-        except requests.exceptions.Timeout:
+            print(
+                "Gemini API status:",
+                response.status_code,
+                flush=True
+            )
+
+        except requests.exceptions.Timeout as error:
+            print("Gemini timeout:", str(error), flush=True)
+
             if attempt == 2:
                 raise RuntimeError(
                     "Gemini timed out after retries. Please try again."
                 )
+
             time.sleep(2)
             continue
 
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as error:
+            print("Gemini connection error:", str(error), flush=True)
+
             if attempt == 2:
                 raise RuntimeError(
                     "Could not connect to Gemini. Please try again."
                 )
+
             time.sleep(2)
             continue
 
@@ -173,6 +190,11 @@ Answer based only on these excerpts.
 
         if attempt < 2:
             time.sleep(2)
+
+    if response is None:
+        raise RuntimeError(
+            "Gemini did not return a response. Please try again."
+        )
 
     if response.status_code in (401, 403):
         raise RuntimeError(
@@ -303,6 +325,8 @@ def ask():
         })
 
     except Exception as error:
+        print("Ask endpoint error:", str(error), flush=True)
+
         return jsonify({
             "success": False,
             "message": str(error)
@@ -320,4 +344,4 @@ def file_too_large(_error):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
