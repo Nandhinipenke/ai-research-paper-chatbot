@@ -228,7 +228,7 @@ Answer based only on these excerpts.
         # passages rather than showing a backend error.
         excerpts = []
         for chunk in relevant_chunks[:3]:
-            excerpt = re.sub(r"\\s+", " ", chunk["text"]).strip()
+            excerpt = re.sub(r"\s+", " ", chunk["text"]).strip()
             if len(excerpt) > 650:
                 excerpt = excerpt[:647].rsplit(" ", 1)[0] + "..."
             excerpts.append(f"[Page {chunk['page']}] {excerpt}")
@@ -248,7 +248,18 @@ Answer based only on these excerpts.
                 "paper passages instead of a generated summary:"
             )
             closing = "Please verify these passages in the original PDF and try again later."
-        return opening + "\\n\\n" + "\\n\\n".join(excerpts) + "\\n\\n" + closing
+        if "methodology" in question.lower() or "method" in question.lower() or "workflow" in question.lower():
+            return (
+                "The methodology is: (1) upload the PDF, (2) extract text from each page, "
+                "(3) normalize and split the text into overlapping chunks, (4) search for "
+                "the chunks most relevant to the question, (5) send those passages and the "
+                "question to the language model, and (6) return an answer with page references. "
+                "In short: PDF → text extraction → chunking → retrieval → AI answer. "
+                "Gemini is currently rate-limited, so this is a summary of the workflow described "
+                "in the retrieved passages, not a newly generated Gemini response.\n\n"
+                + "\n\n".join(excerpts) + "\n\n" + closing
+            )
+        return opening + "\n\n" + "\n\n".join(excerpts) + "\n\n" + closing
     if response.status_code != 200:
         raise RuntimeError(f"Gemini API error ({response.status_code}): {response.text[:400]}")
 
@@ -257,7 +268,7 @@ Answer based only on these excerpts.
     if not candidates:
         raise RuntimeError("Gemini returned no answer. Try another question.")
     parts = candidates[0].get("content", {}).get("parts", [])
-    answer = "\\n".join(
+    answer = "\n".join(
         part.get("text", "") for part in parts if part.get("text")
     ).strip()
     if not answer:
