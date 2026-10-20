@@ -148,7 +148,7 @@ Answer based only on these excerpts.
                     "Content-Type": "application/json"
                 },
                 json=payload,
-                timeout=45
+                timeout=25
             )
 
         except requests.exceptions.Timeout:
