@@ -144,7 +144,7 @@ Answer based only on these excerpts.
                 "Content-Type": "application/json"
             },
             json=payload,
-            timeout=120
+             timeout=45
         )
 
         if response.status_code in (401, 403):
