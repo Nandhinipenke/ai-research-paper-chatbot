@@ -281,9 +281,9 @@ Answer based only on these excerpts.
                     ". The exact data type depends on the paper's dataset and tables; check the cited pages to confirm." + quota_note)
         if any(term in q for term in ("link", "url", "doi", "website", "web site")):
             all_text = " ".join(chunk["text"] for chunk in document_chunks)
-            links = re.findall(r"https?://[^\\s)\\]}>]+", all_text, flags=re.IGNORECASE)
+            links = re.findall(r"https?://\S+", all_text, flags=re.IGNORECASE)
             links = [link.rstrip(".,;:") for link in links]
-            dois = re.findall(r"10\\.\\d{4,9}/[^\\s)\\]}>]+", all_text, flags=re.IGNORECASE)
+            dois = re.findall(r"10\.\d{4,9}/\S+", all_text, flags=re.IGNORECASE)
             for doi in dois:
                 doi = doi.rstrip(".,;:")
                 link = "https://doi.org/" + doi
@@ -291,7 +291,7 @@ Answer based only on these excerpts.
                     links.append(link)
             links = list(dict.fromkeys(links))
             if links:
-                return "I found these links in the PDF:\\n" + "\\n".join("- " + link for link in links[:12]) + quota_note
+                return "I found these links in the PDF:\n" + "\n".join("- " + link for link in links[:12]) + quota_note
             return "I could not detect a web link or DOI in the PDF's readable text. It may be embedded as a clickable link or shown in a format the text extractor cannot read. Check the original PDF." + quota_note
         if any(term in q for term in ("methodology", "method", "workflow", "how does it work")):
             return (
