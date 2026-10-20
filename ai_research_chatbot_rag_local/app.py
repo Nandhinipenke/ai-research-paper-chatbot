@@ -1,107 +1,111 @@
+import math
 import os
 import re
 import time
+from collections import Counter
 import requests
 from flask import Flask, render_template, request, jsonify
 from pypdf import PdfReader
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
 document_chunks = []
-vectorizer = None
-chunk_matrix = None
+document_vectors = []
+document_idf = {}
+
+
+def tokenize(text):
+    return re.findall(r"[a-zA-Z0-9]+", text.lower())
 
 
 def split_into_chunks(text, page_number, chunk_size=1000, overlap=150):
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
-
     chunks = []
     start = 0
-
     while start < len(text):
         end = min(start + chunk_size, len(text))
-
         if end < len(text):
             boundary = text.rfind(". ", start + chunk_size // 2, end)
             if boundary != -1:
                 end = boundary + 1
-
         part = text[start:end].strip()
         if part:
             chunks.append({"text": part, "page": page_number})
-
         if end >= len(text):
             break
-
         start = max(end - overlap, start + 1)
-
     return chunks
 
 
 def read_pdf(file_storage):
     reader = PdfReader(file_storage.stream)
     chunks = []
-
     for page_number, page in enumerate(reader.pages, start=1):
-        chunks.extend(
-            split_into_chunks(page.extract_text() or "", page_number)
-        )
-
+        chunks.extend(split_into_chunks(page.extract_text() or "", page_number))
     return chunks
 
 
 def index_document(chunks):
-    global vectorizer, chunk_matrix
-
+    global document_chunks, document_vectors, document_idf
     if not chunks:
         raise ValueError("No readable text was found in the PDF.")
 
-    new_vectorizer = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2)
-    )
+    vectors = []
+    document_frequency = Counter()
+    for chunk in chunks:
+        counts = Counter(tokenize(chunk["text"]))
+        vectors.append(counts)
+        document_frequency.update(counts.keys())
 
-    new_matrix = new_vectorizer.fit_transform(
-        [chunk["text"] for chunk in chunks]
-    )
-
-    vectorizer = new_vectorizer
-    chunk_matrix = new_matrix
+    total = max(len(vectors), 1)
+    idf = {
+        word: math.log(1 + total / (1 + frequency)) + 1
+        for word, frequency in document_frequency.items()
+    }
+    document_chunks = chunks
+    document_vectors = vectors
+    document_idf = idf
 
 
 def retrieve_relevant_chunks(question, top_k=4):
-    if vectorizer is None or chunk_matrix is None:
+    if not document_chunks or not document_vectors:
         return []
 
-    # Expand common research-paper questions so natural wording matches
-    # terms authors often use in the paper.
     query = question
     lower_question = question.lower()
     expansions = {
-        "methodology": "method approach proposed method experimental setup",
-        "limitations": "limitations weakness constraints future work",
+        "methodology": "method approach proposed experimental setup procedure",
+        "limitations": "limitations weakness constraints future work challenges",
         "objective": "objective aim purpose goal contribution",
-        "results": "results findings evaluation performance",
+        "results": "results findings evaluation performance outcome",
         "conclusion": "conclusion summary future work",
     }
     for key, terms in expansions.items():
         if key in lower_question:
             query += " " + terms
 
-    question_vector = vectorizer.transform([query])
-    scores = cosine_similarity(question_vector, chunk_matrix).ravel()
-    indexes = scores.argsort()[::-1][:top_k]
+    query_terms = set(tokenize(query))
+    if not query_terms:
+        return []
 
-    # Do not pass unrelated passages to the language model.
-    return [document_chunks[i] for i in indexes if scores[i] > 0]
+    scored = []
+    for index, counts in enumerate(document_vectors):
+        score = sum(
+            document_idf.get(term, 0.0) * (1 + math.log(counts[term]))
+            for term in query_terms
+            if counts.get(term, 0) > 0
+        )
+        if score > 0:
+            scored.append((score, index))
+
+    scored.sort(reverse=True)
+    return [document_chunks[i] for _, i in scored[:top_k]]
 
 
 def generate_answer(question, relevant_chunks):
@@ -109,23 +113,21 @@ def generate_answer(question, relevant_chunks):
         raise RuntimeError(
             "GEMINI_API_KEY is missing. Add it in Render Environment."
         )
-
     if not relevant_chunks:
         return (
             "I could not find a clearly relevant passage in this paper. "
-            "Try asking with different keywords."
+            "Try asking with different keywords, or check whether the PDF contains selectable text."
         )
 
     context = "\n\n".join(
         f"[Page {chunk['page']}] {chunk['text']}"
         for chunk in relevant_chunks
     )
-
     prompt = f"""
 You are a helpful research-paper assistant.
 Answer using only the supplied paper excerpts.
-Do not invent facts. If the excerpts do not contain enough information,
-say so. Use simple English and cite page numbers such as (Page 2).
+Use simple English and cite page numbers such as (Page 2).
+If the excerpts do not contain the answer, say that the paper excerpts do not provide enough information. Do not invent facts.
 
 Question: {question}
 
@@ -134,114 +136,62 @@ Paper excerpts:
 
 Answer based only on these excerpts.
 """
-
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{GEMINI_MODEL}:generateContent"
     )
-
     payload = {
-        "contents": [
-            {"parts": [{"text": prompt}]}
-        ],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 700
-        }
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 700},
     }
 
     response = None
-
     for attempt in range(3):
         try:
-            print("Calling Gemini API...", flush=True)
-
             response = requests.post(
                 url,
                 headers={
                     "x-goog-api-key": GEMINI_API_KEY,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=(5, 20)
+                timeout=(5, 25),
             )
-
-            print(
-                "Gemini API status:",
-                response.status_code,
-                flush=True
-            )
-
-        except requests.exceptions.Timeout as error:
-            print("Gemini timeout:", str(error), flush=True)
-
-            if attempt == 2:
-                raise RuntimeError(
-                    "Gemini timed out after retries. Please try again."
-                )
-
-            time.sleep(2)
-            continue
-
         except requests.exceptions.RequestException as error:
-            print("Gemini connection error:", str(error), flush=True)
-
             if attempt == 2:
-                raise RuntimeError(
-                    "Could not connect to Gemini. Please try again."
-                )
-
+                raise RuntimeError(f"Could not connect to Gemini: {error}")
             time.sleep(2)
             continue
 
         if response.status_code not in (429, 500, 502, 503, 504):
             break
-
         if attempt < 2:
             time.sleep(2)
 
     if response is None:
-        raise RuntimeError(
-            "Gemini did not return a response. Please try again."
-        )
-
+        raise RuntimeError("Gemini did not return a response. Please try again.")
     if response.status_code in (401, 403):
+        raise RuntimeError("Gemini API key is invalid or access is denied. Check GEMINI_API_KEY in Render Environment.")
+    if response.status_code == 404:
         raise RuntimeError(
-            "Gemini API key is invalid or access is denied. "
-            "Check GEMINI_API_KEY in Render Environment."
+            f"Gemini model '{GEMINI_MODEL}' was not found for this API. "
+            "In Render Environment, set GEMINI_MODEL to a model available to your API key, such as gemini-2.5-flash."
         )
-
     if response.status_code == 429:
-        raise RuntimeError(
-            "Gemini quota or rate limit reached. Check your "
-            "Google AI Studio usage limits and try again later."
-        )
-
+        raise RuntimeError("Gemini quota or rate limit reached. Check Google AI Studio usage limits.")
     if response.status_code != 200:
-        raise RuntimeError(
-            f"Gemini API error ({response.status_code}): "
-            f"{response.text[:500]}"
-        )
+        raise RuntimeError(f"Gemini API error ({response.status_code}): {response.text[:400]}")
 
     data = response.json()
     candidates = data.get("candidates", [])
-
     if not candidates:
-        raise RuntimeError(
-            "Gemini returned no answer. Try another question."
-        )
-
+        raise RuntimeError("Gemini returned no answer. Try another question.")
     parts = candidates[0].get("content", {}).get("parts", [])
-
     answer = "\n".join(
-        part.get("text", "")
-        for part in parts
-        if part.get("text")
+        part.get("text", "") for part in parts if part.get("text")
     ).strip()
-
     if not answer:
         raise RuntimeError("Gemini returned an empty answer.")
-
     return answer
 
 
@@ -252,105 +202,58 @@ def home():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    global document_chunks
-
     pdf_file = request.files.get("pdf")
-
     if not pdf_file or not pdf_file.filename:
-        return jsonify({
-            "success": False,
-            "message": "Choose a PDF file first."
-        }), 400
-
+        return jsonify({"success": False, "message": "Choose a PDF file first."}), 400
     if not pdf_file.filename.lower().endswith(".pdf"):
-        return jsonify({
-            "success": False,
-            "message": "Only PDF files are supported."
-        }), 400
+        return jsonify({"success": False, "message": "Only PDF files are supported."}), 400
 
     try:
         chunks = read_pdf(pdf_file)
-
         if not chunks:
             return jsonify({
                 "success": False,
-                "message": (
-                    "No selectable text found. Scanned PDFs need OCR "
-                    "before this app can read them."
-                )
+                "message": "No selectable text found. Scanned PDFs need OCR before this app can read them.",
             }), 400
-
         index_document(chunks)
-        document_chunks = chunks
-
         pages = len({chunk["page"] for chunk in chunks})
-
         return jsonify({
             "success": True,
-            "message": (
-                f"Paper loaded: {len(chunks)} text chunks across "
-                f"{pages} readable pages."
-            ),
+            "message": f"Paper loaded: {len(chunks)} text chunks across {pages} readable pages.",
             "chunks": len(chunks),
-            "pages": pages
+            "pages": pages,
         })
-
     except Exception as error:
-        return jsonify({
-            "success": False,
-            "message": str(error)
-        }), 400
+        return jsonify({"success": False, "message": str(error)}), 400
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    if not document_chunks or vectorizer is None or chunk_matrix is None:
-        return jsonify({
-            "success": False,
-            "message": "Upload a research paper first."
-        }), 400
-
+    if not document_chunks:
+        return jsonify({"success": False, "message": "Upload a research paper first."}), 400
     payload = request.get_json(silent=True) or {}
     question = (payload.get("question") or "").strip()
-
     if not question:
-        return jsonify({
-            "success": False,
-            "message": "Type a question first."
-        }), 400
+        return jsonify({"success": False, "message": "Type a question first."}), 400
 
     try:
         selected = retrieve_relevant_chunks(question)
         answer = generate_answer(question, selected)
-
-        sources = list(dict.fromkeys(
-            chunk["page"] for chunk in selected
-        ))
-
-        return jsonify({
-            "success": True,
-            "answer": answer,
-            "sources": sources
-        })
-
+        sources = list(dict.fromkeys(chunk["page"] for chunk in selected))
+        return jsonify({"success": True, "answer": answer, "sources": sources})
     except Exception as error:
         print("Ask endpoint error:", str(error), flush=True)
-
-        return jsonify({
-            "success": False,
-            "message": str(error)
-        }), 502
+        return jsonify({"success": False, "message": str(error)}), 502
 
 
 @app.errorhandler(413)
 def file_too_large(_error):
     return jsonify({
         "success": False,
-        "message": (
-            "PDF is too large. Please upload a file smaller than 20 MB."
-        )
+        "message": "PDF is too large. Please upload a file smaller than 20 MB.",
     }), 413
 
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
