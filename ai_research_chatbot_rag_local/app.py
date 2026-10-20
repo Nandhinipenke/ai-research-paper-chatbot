@@ -189,6 +189,8 @@ Answer based only on these excerpts.
                 for name in preferred + supported:
                     if name and name not in ordered_models and name != GEMINI_MODEL:
                         ordered_models.append(name)
+                    if len(ordered_models) >= 2:
+                        break
 
                 for model_name in ordered_models:
                     candidate = _call_gemini_model(api_root, model_name, headers, payload)
@@ -238,24 +240,29 @@ Answer based only on these excerpts.
 
 def _call_gemini_model(api_root, model_name, headers, payload):
     url = f"{api_root}/models/{model_name}:generateContent"
-    for attempt in range(3):
+    # Keep each request short so a slow upstream model cannot cause the
+    # Render/Gunicorn worker to be killed. At most one retry per model.
+    for attempt in range(2):
         try:
             response = requests.post(
                 url,
                 headers=headers,
                 json=payload,
-                timeout=(5, 25),
+                timeout=(4, 12),
             )
         except requests.exceptions.RequestException as error:
-            if attempt == 2:
-                raise RuntimeError(f"Could not connect to Gemini: {error}")
-            time.sleep(2)
+            if attempt == 1:
+                raise RuntimeError(
+                    "Gemini took too long to respond or could not be reached. "
+                    "Please retry in a moment."
+                ) from error
+            time.sleep(1)
             continue
 
         if response.status_code not in (429, 500, 502, 503, 504):
             return response
-        if attempt < 2:
-            time.sleep(2)
+        if attempt == 0:
+            time.sleep(1)
     return response
 
 
