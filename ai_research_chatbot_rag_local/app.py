@@ -1,5 +1,7 @@
+
 import os
 import re
+import time
 import requests
 from flask import Flask, render_template, request, jsonify
 from pypdf import PdfReader
@@ -136,59 +138,80 @@ Answer based only on these excerpts.
         }
     }
 
-    try:
-        response = requests.post(
-            url,
-            headers={
-                "x-goog-api-key": GEMINI_API_KEY,
-                "Content-Type": "application/json"
-            },
-            json=payload,
-             timeout=45
+    response = None
+
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=45
+            )
+
+        except requests.exceptions.Timeout:
+            if attempt == 2:
+                raise RuntimeError(
+                    "Gemini timed out after retries. Please try again."
+                )
+            time.sleep(2)
+            continue
+
+        except requests.exceptions.RequestException:
+            if attempt == 2:
+                raise RuntimeError(
+                    "Could not connect to Gemini. Please try again."
+                )
+            time.sleep(2)
+            continue
+
+        if response.status_code not in (429, 500, 502, 503, 504):
+            break
+
+        if attempt < 2:
+            time.sleep(2)
+
+    if response.status_code in (401, 403):
+        raise RuntimeError(
+            "Gemini API key is invalid or access is denied. "
+            "Check GEMINI_API_KEY in Render Environment."
         )
 
-        if response.status_code in (401, 403):
-            raise RuntimeError(
-                "Gemini API key is invalid or access is denied. "
-                "Check GEMINI_API_KEY in Render Environment."
-            )
+    if response.status_code == 429:
+        raise RuntimeError(
+            "Gemini quota or rate limit reached. Check your "
+            "Google AI Studio usage limits and try again later."
+        )
 
-        if response.status_code == 429:
-            raise RuntimeError(
-                "Gemini quota or rate limit reached. Check your "
-                "Google AI Studio usage limits and try again later."
-            )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Gemini API error ({response.status_code}): "
+            f"{response.text[:500]}"
+        )
 
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Gemini API error ({response.status_code}): "
-                f"{response.text[:500]}"
-            )
+    data = response.json()
+    candidates = data.get("candidates", [])
 
-        data = response.json()
-        candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(
+            "Gemini returned no answer. Try another question."
+        )
 
-        if not candidates:
-            raise RuntimeError(
-                "Gemini returned no answer. Try another question."
-            )
+    parts = candidates[0].get("content", {}).get("parts", [])
 
-        parts = candidates[0].get("content", {}).get("parts", [])
-        answer = "\n".join(
-            part.get("text", "")
-            for part in parts
-            if part.get("text")
-        ).strip()
+    answer = "\n".join(
+        part.get("text", "")
+        for part in parts
+        if part.get("text")
+    ).strip()
 
-        if not answer:
-            raise RuntimeError("Gemini returned an empty answer.")
+    if not answer:
+        raise RuntimeError("Gemini returned an empty answer.")
 
-        return answer
-
-    except requests.exceptions.Timeout:
-        raise RuntimeError("Gemini timed out. Please try again.")
-    except requests.exceptions.RequestException as exc:
-        raise RuntimeError(f"Could not connect to Gemini: {exc}")
+    return answer
 
 
 @app.route("/")
