@@ -11,7 +11,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
 
 document_chunks = []
 document_vectors = []
@@ -146,16 +146,10 @@ Answer based only on these excerpts.
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 700},
     }
 
-    # If the configured model is unavailable for this key/API, discover models
-    # that this key can actually call instead of repeatedly returning a 404.
-    models_to_try = [GEMINI_MODEL]
-    response = None
-    for model_name in models_to_try:
-        response = _call_gemini_model(api_root, model_name, headers, payload)
-        if response.status_code != 404:
-            break
-
-    if response is not None and response.status_code == 404:
+    # If the configured model is unavailable, discover the models exposed
+    # to this API key and try supported candidates until one responds.
+    response = _call_gemini_model(api_root, GEMINI_MODEL, headers, payload)
+    if response.status_code == 404:
         try:
             model_response = requests.get(
                 f"{api_root}/models",
@@ -164,23 +158,31 @@ Answer based only on these excerpts.
             )
             if model_response.status_code == 200:
                 available = model_response.json().get("models", [])
+                supported = [
+                    item.get("name", "").removeprefix("models/")
+                    for item in available
+                    if "generateContent" in item.get("supportedGenerationMethods", [])
+                ]
                 preferred = [
+                    "gemini-3.8-flash",
+                    "gemini-3.8-flash-lite",
+                    "gemini-3-flash",
                     "gemini-2.5-flash",
                     "gemini-2.5-flash-lite",
                     "gemini-2.0-flash",
                     "gemini-2.0-flash-lite",
                 ]
-                supported = {
-                    item.get("name", "").removeprefix("models/"): item
-                    for item in available
-                    if "generateContent" in item.get("supportedGenerationMethods", [])
-                }
-                fallback = next((name for name in preferred if name in supported), None)
-                if fallback is None:
-                    fallback = next(iter(supported), None)
-                if fallback:
-                    response = _call_gemini_model(api_root, fallback, headers, payload)
-            elif response is not None:
+                ordered_models = []
+                for name in preferred + supported:
+                    if name and name not in ordered_models and name != GEMINI_MODEL:
+                        ordered_models.append(name)
+
+                for model_name in ordered_models:
+                    candidate = _call_gemini_model(api_root, model_name, headers, payload)
+                    response = candidate
+                    if candidate.status_code != 404:
+                        break
+            else:
                 print(
                     "Gemini model discovery failed:",
                     model_response.status_code,
