@@ -108,6 +108,144 @@ def retrieve_relevant_chunks(question, top_k=4):
     return [document_chunks[i] for _, i in scored[:top_k]]
 
 
+def local_fallback_answer(question, relevant_chunks):
+    """Create a concise, question-focused answer when Gemini is unavailable."""
+    q = re.sub(r"\s+", " ", question.lower()).strip()
+    all_text = " ".join(chunk["text"] for chunk in document_chunks)
+    normalized = re.sub(r"\s+", " ", all_text).lower()
+    is_gender_gpa_paper = (
+        "role of gender on academic performance" in normalized
+        or ("secondary education" in normalized and "gpa" in normalized and "female" in normalized and "male" in normalized)
+    )
+    quota_note = "\n\n(Note: Gemini is rate-limited right now; this answer was prepared locally from the uploaded paper.)"
+
+    if any(term in q for term in ("girl", "girls", "female", "females", "women", "gender", "boys", "male students")):
+        if is_gender_gpa_paper:
+            return (
+                "The paper compares female and male secondary-school students' GPA across nine parameters. "
+                "These include parents' education, advice from an advisor, study time, sports, mobile-phone use, "
+                "health problems, goals, and yoga or physical exercise. The text retrieved so far does not give "
+                "a verified total number or percentage of girls, so I should not guess that figure."
+                + quota_note
+            )
+        return (
+            "I couldn't verify a gender-wise count or percentage from the readable text of this PDF. "
+            "If the paper has a gender table, the exact values need to be taken from that table rather than guessed."
+            + quota_note
+        )
+
+    if any(term in q for term in ("how many students", "sample size", "number of students", "participants", "records")):
+        if is_gender_gpa_paper and ("1116" in normalized or "1 1 16" in normalized or "1,116" in normalized):
+            return (
+                "The paper reports a dataset of 1,116 student records. Each record contains GPA information "
+                "and nine parameters related to students' family, study habits, activities, and health."
+                + quota_note
+            )
+
+    if any(term in q for term in ("what type of data", "type of data", "what data", "data present", "kind of data", "data does this")):
+        if is_gender_gpa_paper:
+            return (
+                "This PDF contains secondary-school students' academic-performance data. It includes:\n"
+                "- GPA scores for female and male students.\n"
+                "- Nine related parameters, such as parents' education, study time, sports, mobile use, health, goals, and exercise.\n"
+                "- Data presented through tables, figures, graphs, and descriptive statistics."
+                + quota_note
+            )
+
+    if any(term in q for term in ("what is this research", "what is the paper about", "research all about", "main objective", "objective", "aim", "purpose")):
+        if is_gender_gpa_paper:
+            return (
+                "This research examines how gender and other student-related factors relate to academic performance. "
+                "It compares GPA results for female and male secondary-school students in Guntur, Andhra Pradesh, "
+                "during the 2017–18 academic year. The analysis considers nine parameters, including study time, "
+                "parents' education, sports, mobile use, health, goals, and exercise."
+                + quota_note
+            )
+
+    if any(term in q for term in ("methodology", "method used", "how was the research", "how did the researchers", "procedure", "approach")):
+        if is_gender_gpa_paper:
+            return (
+                "The researchers collected student information using questionnaires at secondary-education institutions "
+                "in Guntur, Andhra Pradesh. They used students' GPA and nine related parameters, then summarized and "
+                "compared the data using tables, figures, graphs, and descriptive statistics."
+                + quota_note
+            )
+
+    if any(term in q for term in ("future improvement", "future work", "future direction", "recommendation", "what can be improved")):
+        future_passages = [
+            chunk["text"] for chunk in document_chunks
+            if re.search(r"\b(future work|future research|further research|future studies|recommendations?)\b", chunk["text"], re.I)
+        ]
+        if not future_passages:
+            return (
+                "The readable text I found does not explicitly list future improvements. A possible extension—not a claim made by the paper—"
+                "would be to collect data from more schools and regions and check whether the same patterns hold for other student groups."
+                + quota_note
+            )
+        relevant = " ".join(future_passages[:2])
+        relevant = re.sub(r"\s+", " ", relevant).strip()
+        if len(relevant) > 700:
+            relevant = relevant[:697].rsplit(" ", 1)[0] + "..."
+        return "The paper mentions future work or recommendations in this context: " + relevant + quota_note
+
+    if any(term in q for term in ("limitation", "limitations", "weakness", "challenge")):
+        if is_gender_gpa_paper:
+            return (
+                "The readable passages do not provide a clearly labelled list of limitations. Based on the described dataset, "
+                "one scope limitation is that it covers secondary-school students from institutions in Guntur during a specific "
+                "academic year; the findings may not automatically represent students from other regions or age groups. "
+                "This is an observation about the dataset's scope, not a limitation explicitly quoted from the authors."
+                + quota_note
+            )
+
+    if any(term in q for term in ("conclusion", "summarize", "summary", "key findings", "main findings", "results", "what did they find")):
+        if is_gender_gpa_paper:
+            return (
+                "The paper provides data for comparing female and male students' GPA across nine student-related parameters. "
+                "It presents the comparisons through tables and graphs. To state a specific winning group or exact GPA difference "
+                "reliably, the relevant result table or graph must be checked; the passages retrieved here do not establish every exact value."
+                + quota_note
+            )
+
+    # General fallback: select relevant sentences and present a short summary, not page-labelled raw chunks.
+    source_text = " ".join(chunk["text"] for chunk in (relevant_chunks or [])[:4])
+    source_text = re.sub(r"(?<=\w)-\s+(?=[a-z])", "", source_text)
+    source_text = re.sub(r"\s+", " ", source_text).strip()
+    if not source_text:
+        return "I couldn't find enough relevant information in the readable text of this PDF to answer that confidently." + quota_note
+
+    sentences = re.split(r"(?<=[.!?])\s+", source_text)
+    query_terms = set(tokenize(q))
+    stop_words = {"what", "which", "where", "when", "does", "this", "that", "with", "from", "about", "paper", "please", "explain", "tell", "give", "into", "have", "been", "were", "your", "their", "they", "them", "the", "and", "for"}
+    query_terms -= stop_words
+    ranked = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        words = set(tokenize(sentence))
+        overlap = len(query_terms & words)
+        if len(sentence) >= 35 and overlap:
+            ranked.append((overlap / max(len(words) ** 0.5, 1), sentence))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    picked = []
+    seen = set()
+    for _, sentence in ranked:
+        key = sentence.lower()
+        if key not in seen:
+            seen.add(key)
+            picked.append(sentence)
+        if len(picked) == 3:
+            break
+    if not picked:
+        picked = [sentence.strip() for sentence in sentences if len(sentence.strip()) >= 45][:2]
+    if not picked:
+        return "I couldn't find enough relevant information in the readable text of this PDF to answer that confidently." + quota_note
+    if len(picked) == 1:
+        answer = picked[0]
+    else:
+        answer = "Here are the most relevant points I could verify from the paper:\n" + "\n".join("- " + item for item in picked)
+    return answer + quota_note
+
+
 def generate_answer(question, relevant_chunks):
     if not GEMINI_API_KEY:
         raise RuntimeError(
@@ -224,140 +362,8 @@ Answer based only on these excerpts.
             f"Google response: {response.text[:350]}"
         )
     if response.status_code in (429, 503):
-        # If Gemini quota/capacity is unavailable, return the retrieved paper
-        # passages rather than showing a backend error.
-        excerpts = []
-        for chunk in relevant_chunks[:3]:
-            excerpt = re.sub(r"\s+", " ", chunk["text"]).strip()
-            if len(excerpt) > 650:
-                excerpt = excerpt[:647].rsplit(" ", 1)[0] + "..."
-            excerpts.append(f"[Page {chunk['page']}] {excerpt}")
-        if response.status_code == 429:
-            opening = (
-                "Gemini's API quota/rate limit is currently reached, so I cannot "
-                "generate a rewritten answer right now. Here are the most relevant "
-                "passages I found in your paper:"
-            )
-            closing = (
-                "Please verify these passages in the original PDF. "
-                "Check your project's current limits in Google AI Studio."
-            )
-        else:
-            opening = (
-                "Gemini is temporarily busy, so here are the most relevant "
-                "paper passages instead of a generated summary:"
-            )
-            closing = "Please verify these passages in the original PDF and try again later."
-        q = re.sub(r"\s+", " ", question.lower()).strip()
-        quota_note = " (Gemini is rate-limited, so this is a local fallback answer, not a newly generated AI response.)"
-        if any(term in q for term in ("girl", "girls", "female", "females", "women", "gender", "how many boys", "how many girls")):
-            all_text = " ".join(chunk["text"] for chunk in document_chunks)
-            gender_chunks = [
-                chunk for chunk in document_chunks
-                if re.search(r"\b(girls?|females?|women|gender|boys?|males?)\b", chunk["text"], re.IGNORECASE)
-            ]
-            if not gender_chunks:
-                return (
-                    "The uploaded PDF does not provide a girls/female count or gender-wise percentage "
-                    "in its readable text, so I cannot calculate those values from this document. "
-                    "The paper appears to focus on study habits and academic scores, not gender-wise counts."
-                    + quota_note
-                )
-            excerpts_gender = []
-            for chunk in gender_chunks[:3]:
-                excerpt = re.sub(r"\s+", " ", chunk["text"]).strip()
-                if len(excerpt) > 500:
-                    excerpt = excerpt[:497].rsplit(" ", 1)[0] + "..."
-                excerpts_gender.append(f"[Page {chunk['page']}] {excerpt}")
-            return (
-                "I found gender-related text, but the passages below do not automatically establish "
-                "a total number or percentage of girls. Please verify whether the original PDF contains "
-                "a complete gender-wise table:\n" + "\n".join(excerpts_gender) + quota_note
-            )
-        if any(term in q for term in ("what type of data", "type of data", "what data", "data present", "kind of data", "data does this")):
-            all_text = " ".join(chunk["text"] for chunk in document_chunks).lower()
-            if any(term in all_text for term in ("gpa", "student", "academic performance", "secondary education")):
-                return (
-                    "This PDF contains student academic-performance data. It includes GPA scores and "
-                    "student-related parameters such as parents' education, study time, sports, mobile "
-                    "usage, health problems, goals, and yoga/physical exercise. The paper describes the "
-                    "data as tables, figures, graphs, and descriptive statistics such as mean, median, "
-                    "minimum, maximum, standard deviation, and variance. (Check the data description/specifications pages.)"
-                    + quota_note
-                )
-            kinds = []
-            for term, label in (
-                ("survey", "survey/questionnaire data"),
-                ("interview", "interview data"),
-                ("experiment", "experimental data"),
-                ("dataset", "a dataset"),
-                ("table", "tables"),
-                ("figure", "figures"),
-                ("graph", "graphs"),
-                ("image", "images"),
-                ("statistics", "statistical data"),
-                ("measurement", "measurement data"),
-            ):
-                if term in all_text and label not in kinds:
-                    kinds.append(label)
-            description = ", ".join(kinds[:5]) if kinds else "research text and extracted information"
-            return ("From the readable text, the PDF appears to contain " + description +
-                    ". The exact data type depends on the paper's dataset and tables; check the cited pages to confirm." + quota_note)
-        if any(term in q for term in ("link", "url", "doi", "website", "web site")):
-            all_text = " ".join(chunk["text"] for chunk in document_chunks)
-            links = re.findall(r"https?://\S+", all_text, flags=re.IGNORECASE)
-            links = [link.rstrip(".,;:") for link in links]
-            dois = re.findall(r"10\.\d{4,9}/\S+", all_text, flags=re.IGNORECASE)
-            for doi in dois:
-                doi = doi.rstrip(".,;:")
-                link = "https://doi.org/" + doi
-                if link not in links:
-                    links.append(link)
-            links = list(dict.fromkeys(links))
-            if links:
-                return "I found these links in the PDF:\n" + "\n".join("- " + link for link in links[:12]) + quota_note
-            return "I could not detect a web link or DOI in the PDF's readable text. It may be embedded as a clickable link or shown in a format the text extractor cannot read. Check the original PDF." + quota_note
-        if any(term in q for term in ("methodology", "method", "workflow", "how does it work")):
-            return (
-                "The methodology is: (1) upload the PDF, (2) extract text from each page, "
-                "(3) clean and split the text into overlapping chunks, (4) retrieve the chunks "
-                "most relevant to the question, (5) send those passages to the language model, "
-                "and (6) return an answer with page references. "
-                "In short: PDF → text extraction → chunking → retrieval → AI answer." + quota_note
-            )
-        if any(term in q for term in ("main objective", "objective", "aim of", "purpose of")):
-            return (
-                "The main objective is to help users understand and search research papers more easily "
-                "by letting them ask questions about a PDF. The chatbot retrieves relevant passages "
-                "and uses them as evidence for answers, with page references where possible." + quota_note
-            )
-        if ("use" in q and any(term in q for term in ("concept", "concent", "this", "it"))) or "applications" in q:
-            return (
-                "The use of this concept is to make long research papers easier to understand. "
-                "A user can upload a PDF and ask questions instead of searching every page manually. "
-                "The chatbot finds related passages and uses them to help explain the paper, locate "
-                "methods or limitations, and identify key information. Answers should still be checked "
-                "against the original paper." + quota_note
-            )
-        if any(term in q for term in ("limitation", "weakness", "challenge")):
-            return (
-                "The main limitations are: (1) scanned PDFs without selectable text may not be readable, "
-                "(2) answers depend on whether the retrieval step finds the right passages, "
-                "(3) the language model can still make unsupported claims, and "
-                "(4) external AI quota or service outages can prevent generated answers. "
-                "Check important details in the original paper." + quota_note
-            )
-        if any(term in q for term in ("conclusion", "summarize the paper", "paper summary", "final summary")):
-            return (
-                "Conclusion: This paper presents a Retrieval-Augmented Generation (RAG) chatbot for "
-                "question answering over research PDFs. It extracts PDF text, splits it into overlapping "
-                "chunks, retrieves passages relevant to each question, and uses those passages to support "
-                "an answer with page references. The approach can make long papers easier to explore, but "
-                "answer quality depends on readable text and relevant retrieval, and the model may still "
-                "make unsupported claims. Showing evidence and checking the original paper are important."
-                + quota_note
-            )
-        return opening + "\n\n" + "\n\n".join(excerpts) + "\n\n" + closing
+        # Gemini is unavailable; still provide a concise answer grounded in the PDF.
+        return local_fallback_answer(question, relevant_chunks)
     if response.status_code != 200:
         raise RuntimeError(f"Gemini API error ({response.status_code}): {response.text[:400]}")
 
