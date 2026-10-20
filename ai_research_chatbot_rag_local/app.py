@@ -254,7 +254,7 @@ Answer based only on these excerpts.
             all_text = " ".join(chunk["text"] for chunk in document_chunks)
             gender_chunks = [
                 chunk for chunk in document_chunks
-                if re.search(r"\\b(girls?|females?|women|gender|boys?|males?)\\b", chunk["text"], re.IGNORECASE)
+                if re.search(r"\b(girls?|females?|women|gender|boys?|males?)\b", chunk["text"], re.IGNORECASE)
             ]
             if not gender_chunks:
                 return (
@@ -265,14 +265,14 @@ Answer based only on these excerpts.
                 )
             excerpts_gender = []
             for chunk in gender_chunks[:3]:
-                excerpt = re.sub(r"\\s+", " ", chunk["text"]).strip()
+                excerpt = re.sub(r"\s+", " ", chunk["text"]).strip()
                 if len(excerpt) > 500:
                     excerpt = excerpt[:497].rsplit(" ", 1)[0] + "..."
                 excerpts_gender.append(f"[Page {chunk['page']}] {excerpt}")
             return (
                 "I found gender-related text, but the passages below do not automatically establish "
                 "a total number or percentage of girls. Please verify whether the original PDF contains "
-                "a complete gender-wise table:\\n" + "\\n".join(excerpts_gender) + quota_note
+                "a complete gender-wise table:\n" + "\n".join(excerpts_gender) + quota_note
             )
         if any(term in q for term in ("what type of data", "type of data", "what data", "data present", "kind of data", "data does this")):
             all_text = " ".join(chunk["text"] for chunk in document_chunks).lower()
