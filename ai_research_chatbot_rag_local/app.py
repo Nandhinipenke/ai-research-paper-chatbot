@@ -248,7 +248,7 @@ Answer based only on these excerpts.
                 "paper passages instead of a generated summary:"
             )
             closing = "Please verify these passages in the original PDF and try again later."
-        q = re.sub(r"\\s+", " ", question.lower()).strip()
+        q = re.sub(r"\s+", " ", question.lower()).strip()
         quota_note = " (Gemini is rate-limited, so this is a local fallback answer, not a newly generated AI response.)"
         if any(term in q for term in ("methodology", "method", "workflow", "how does it work")):
             return (
@@ -280,7 +280,7 @@ Answer based only on these excerpts.
                 "(4) external AI quota or service outages can prevent generated answers. "
                 "Check important details in the original paper." + quota_note
             )
-        return opening + "\\n\\n" + "\\n\\n".join(excerpts) + "\\n\\n" + closing
+        return opening + "\n\n" + "\n\n".join(excerpts) + "\n\n" + closing
     if response.status_code != 200:
         raise RuntimeError(f"Gemini API error ({response.status_code}): {response.text[:400]}")
 
